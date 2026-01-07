@@ -1,0 +1,31 @@
+[package]
+name = "smoltcp-contrib"
+version = "0.1.0"
+edition = "2024"
+authors = ["manuelgdlvh <manuelgdlvh@gmail.com>"]
+description = "Repository for contributing and experimenting with new features and API's"
+documentation = "https://docs.rs/smoltcp-contrib/"
+homepage = "https://github.com/manuelgdlvh/smoltcp-contrib"
+readme = "README.md"
+keywords = ["ip", "tcp", "udp", "ethernet", "network"]
+categories = ["embedded", "network-programming"]
+license = "0BSD"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+
+[dependencies]
+smoltcp = "0.12.0"
+libc = { version = "0.2.179", optional = true }
+
+
+[dev-dependencies]
+libbpf-sys = "1.6.2"
+
+[features]
+default = ["phy-xdp"]
+phy-xdp = ["dep:libc"]
+
+
+
