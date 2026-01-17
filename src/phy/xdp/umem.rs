@@ -1,48 +1,69 @@
-use std::{alloc::Layout, io};
+use std::{alloc::Layout, io, mem::ManuallyDrop};
 
 pub struct Umem<'a> {
     base_addr: usize,
-    pages: Box<[UmemPage<'a>]>,
+    pages: Box<[ManuallyDrop<UmemPage<'a>>]>,
     alignment: usize,
     free_page_id: Option<u16>,
 }
 
+impl<'a> Drop for Umem<'a> {
+    fn drop(&mut self) {
+        let layout =
+            Layout::from_size_align(self.alignment * self.pages.len(), self.alignment.into())
+                .expect("Alignment and Size are always valid");
+        unsafe {
+            std::alloc::dealloc(self.base_addr as *mut u8, layout);
+        }
+    }
+}
+
 impl<'a> Umem<'a> {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config) -> io::Result<Self> {
         let layout = Layout::from_size_align(
             config.entries * usize::from(config.alignment),
             config.alignment.into(),
         )
-        .expect("Alignment and size are valid always");
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Entries or Alignment are wrong",
+            )
+        })?;
 
-        let umem_ptr = unsafe { std::alloc::alloc(layout) };
+        // SAFETY: Umem alloc is not null nor uninitialized. Also all inner values are interpretable as [0;N]
+        let umem_ptr = unsafe {
+            let ptr = std::alloc::alloc(layout);
+            if ptr.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            std::ptr::write_bytes(ptr, 0, usize::from(config.alignment) * config.entries);
+            ptr
+        };
 
         let mut pages = Vec::with_capacity(config.entries);
         // Free Pages Initialization
         for i in 0..config.entries {
             let mut page = unsafe {
-                UmemPage::from(
-                    umem_ptr.add(i * usize::from(config.alignment)),
-                    config.alignment.into(),
-                )
+                let page_ptr = umem_ptr.add(i * usize::from(config.alignment));
+                UmemPage::from(page_ptr, config.alignment.into())
             };
 
-            let free_page_id: Option<u16> = if i == config.entries - 1 {
+            let free_page_id = if i == config.entries - 1 {
                 None
             } else {
                 Some((i + 1) as u16)
             };
 
             page.headroom_mut().set_free_page_id(free_page_id);
-            pages.push(page);
+            pages.push(ManuallyDrop::new(page));
         }
-
-        Self {
+        Ok(Self {
             base_addr: umem_ptr.addr(),
             pages: pages.into_boxed_slice(),
             alignment: config.alignment.into(),
             free_page_id: Some(0),
-        }
+        })
     }
 
     pub fn base_addr(&self) -> usize {
@@ -134,8 +155,12 @@ pub struct UmemPage<'a> {
 }
 
 impl UmemPage<'_> {
-    pub unsafe fn from(ptr: *mut u8, len: usize) -> Self {
-        let h = unsafe { (ptr as *mut HeadRoom).as_mut().expect("asd") };
+    unsafe fn from(ptr: *mut u8, len: usize) -> Self {
+        let h = unsafe {
+            (ptr as *mut HeadRoom)
+                .as_mut()
+                .expect("Always initialized with valid memory type")
+        };
         let ptr = unsafe { ptr.add(std::mem::size_of::<HeadRoom>()) };
         let len = len - std::mem::size_of::<HeadRoom>();
         let buffer = std::ptr::slice_from_raw_parts_mut(ptr, len);
@@ -143,7 +168,8 @@ impl UmemPage<'_> {
     }
 
     fn buffer(&self) -> &[u8] {
-        unsafe { self.buffer.as_ref().expect("Derived from Umem allocation") }
+        // SAFETY: UmemPage lives as long as Umem.
+        unsafe { self.buffer.as_ref().unwrap_unchecked() }
     }
 
     pub fn read_packet(&self, desc: libc::xdp_desc) -> &[u8] {
@@ -153,11 +179,9 @@ impl UmemPage<'_> {
     }
 
     pub fn write_packet(&mut self, buf: &[u8]) {
-        let packet_len = buf.len();
-        let packet_ptr = buf.as_ptr();
-
+        // SAFETY: UmemPage lives as long as Umem.
         unsafe {
-            std::ptr::copy_nonoverlapping(packet_ptr, self.buffer.cast(), packet_len);
+            self.buffer.as_mut().unwrap_unchecked()[..buf.len()].copy_from_slice(buf);
         }
     }
 

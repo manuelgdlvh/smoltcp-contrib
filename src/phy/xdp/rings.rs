@@ -2,7 +2,7 @@ use std::{
     io,
     marker::PhantomData,
     os::fd::RawFd,
-    sync::atomic::{Ordering, fence},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use libc::{
@@ -11,14 +11,17 @@ use libc::{
 };
 
 pub fn offsets(socket_fd: RawFd) -> io::Result<libc::xdp_mmap_offsets_v1> {
-    let mut offsets = libc::xdp_mmap_offsets_v1 {
-        rx: unsafe { std::mem::zeroed() },
-        tx: unsafe { std::mem::zeroed() },
-        fr: unsafe { std::mem::zeroed() },
-        cr: unsafe { std::mem::zeroed() },
+    // SAFETY: [0;N] is valid representation of inner u64 offsets
+    let mut offsets = unsafe {
+        libc::xdp_mmap_offsets_v1 {
+            rx: std::mem::zeroed(),
+            tx: std::mem::zeroed(),
+            fr: std::mem::zeroed(),
+            cr: std::mem::zeroed(),
+        }
     };
-    let mut size = std::mem::size_of::<libc::xdp_mmap_offsets_v1>() as u32;
 
+    let mut size = std::mem::size_of_val(&offsets) as u32;
     let result = unsafe {
         libc::getsockopt(
             socket_fd,
@@ -57,7 +60,6 @@ pub fn build<K: Marker>(
     };
 
     let mmap_len = ring_offset.desc as usize + (size * std::mem::size_of::<libc::xdp_desc>());
-
     let ring_ptr = unsafe {
         libc::mmap(
             std::ptr::null_mut(),
@@ -115,9 +117,9 @@ pub struct Writer {}
 pub struct XdpRing<K: Marker> {
     type_: Type,
     // Is unsound to be & or &mut because kernel at least read this pointers.
-    consumer: *mut u32,
-    producer: *mut u32,
-    descriptors: *mut libc::xdp_desc,
+    consumer: *mut AtomicU32,
+    producer: *mut AtomicU32,
+    descriptors: *mut [libc::xdp_desc],
     mask: u32,
     _marker: PhantomData<K>,
 }
@@ -133,20 +135,18 @@ impl<K: Marker> XdpRing<K> {
             unsafe { base.add(offset) as *mut T }
         }
 
-        let producer = unsafe {
-            ptr_at::<u32>(base_ptr as *mut u8, offset.producer as usize)
-                .as_mut()
-                .expect("")
-        };
-        let consumer = unsafe { ptr_at::<u32>(base_ptr as *mut u8, offset.consumer as usize) };
-        let descriptors =
+        let producer =
+            unsafe { ptr_at::<AtomicU32>(base_ptr as *mut u8, offset.producer as usize) };
+        let consumer =
+            unsafe { ptr_at::<AtomicU32>(base_ptr as *mut u8, offset.consumer as usize) };
+        let desc_base =
             unsafe { ptr_at::<libc::xdp_desc>(base_ptr as *mut u8, offset.desc as usize) };
 
         Self {
             type_,
             consumer,
             producer,
-            descriptors,
+            descriptors: std::ptr::slice_from_raw_parts_mut(desc_base, size),
             mask: (size - 1) as u32,
             _marker: Default::default(),
         }
@@ -163,17 +163,20 @@ impl<K: Marker> XdpRing<K> {
 
 impl XdpRing<Reader> {
     pub fn read(&mut self) -> Option<libc::xdp_desc> {
-        let (c, p) = unsafe { (*self.consumer, *self.producer) };
-        fence(Ordering::Acquire);
+        let (c, p) = unsafe {
+            (
+                (*self.consumer).load(Ordering::Relaxed),
+                (*self.producer).load(Ordering::Acquire),
+            )
+        };
         if c == p {
             return None;
         }
 
         let idx = c & self.mask;
         let res = unsafe {
-            let res = *self.descriptors.add(idx as usize);
-            fence(Ordering::Release);
-            *self.consumer += 1;
+            let res = (*self.descriptors)[idx as usize];
+            (*self.consumer).fetch_add(1, Ordering::Release);
             res
         };
 
@@ -183,8 +186,12 @@ impl XdpRing<Reader> {
 
 impl XdpRing<Writer> {
     pub fn write(&mut self, desc: libc::xdp_desc) -> io::Result<()> {
-        let (c, p) = unsafe { (*self.consumer, *self.producer) };
-        fence(Ordering::Acquire);
+        let (c, p) = unsafe {
+            (
+                (*self.consumer).load(Ordering::Acquire),
+                (*self.producer).load(Ordering::Relaxed),
+            )
+        };
 
         if (p - c) > self.mask {
             return Err(io::Error::new(
@@ -195,9 +202,8 @@ impl XdpRing<Writer> {
 
         let idx = p & self.mask;
         unsafe {
-            std::ptr::write(self.descriptors.add(idx as usize), desc);
-            fence(Ordering::Release);
-            *self.producer += 1;
+            (*self.descriptors)[idx as usize] = desc;
+            (*self.producer).fetch_add(1, Ordering::Release);
         }
 
         Ok(())

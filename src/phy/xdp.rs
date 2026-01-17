@@ -26,6 +26,12 @@ pub struct XdpSocket<'a> {
     inner: Rc<RefCell<Inner<'a>>>,
 }
 
+impl Drop for XdpSocket<'_> {
+    fn drop(&mut self) {
+        self.lower.close();
+    }
+}
+
 struct Inner<'a> {
     umem: Umem<'a>,
     tx: XdpRing<Writer>,
@@ -59,7 +65,7 @@ impl XdpSocket<'_> {
     ///
     pub fn new(name: &str, config: Config) -> io::Result<XdpSocket<'_>> {
         let mut lower = XdpSocketDesc::new(name)?;
-        let umem = Umem::new(config.umem);
+        let umem = Umem::new(config.umem)?;
 
         lower.bind_umem(&umem)?;
 

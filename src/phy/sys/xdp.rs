@@ -131,12 +131,8 @@ impl XdpSocketDesc {
 
         Ok(())
     }
-}
 
-impl Drop for XdpSocketDesc {
-    fn drop(&mut self) {
-        unsafe {
-            libc::close(self.lower);
-        }
+    pub fn close(&self) {
+        unsafe { libc::close(self.lower) };
     }
 }
