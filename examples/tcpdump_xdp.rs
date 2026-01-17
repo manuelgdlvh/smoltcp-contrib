@@ -10,9 +10,7 @@ use smoltcp::{
     wire::{EthernetFrame, PrettyPrinter},
 };
 
-use smoltcp_contrib::phy::xdp::rings::Config as RingConfig;
-use smoltcp_contrib::phy::xdp::umem::{ChunkAlignment, Config as UmemConfig};
-use smoltcp_contrib::phy::xdp::{Config, XdpSocket};
+use smoltcp_contrib::phy::xdp::{ChunkConfig, Config, RingConfig, UmemConfig, XdpSocket};
 
 // sudo ip link set dev wlan0 xdp obj xdp.o sec xdp
 // sudo RUST_BACKTRACE=1 cargo run --example tcpdump-xdp -- {IFNAME}
@@ -26,7 +24,7 @@ fn main() {
         queue_id: 0,
         umem: UmemConfig {
             entries: 1024,
-            alignment: ChunkAlignment::FourK,
+            alignment: ChunkConfig::FourK,
         },
         tx: RingConfig { size: 16 },
         rx: RingConfig { size: 16 },

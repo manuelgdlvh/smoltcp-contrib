@@ -18,8 +18,12 @@ use crate::phy::{
     },
 };
 
-pub mod rings;
-pub mod umem;
+pub(crate) mod rings;
+pub(crate) mod umem;
+
+pub use rings::Config as RingConfig;
+pub use umem::ChunkAlignment as ChunkConfig;
+pub use umem::Config as UmemConfig;
 
 pub struct XdpSocket<'a> {
     lower: XdpSocketDesc,

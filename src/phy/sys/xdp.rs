@@ -39,8 +39,7 @@ impl XdpSocketDesc {
             }
 
             let mut ifr: libc::ifreq = mem::zeroed();
-            let name = CString::new(ifname).unwrap();
-            libc::strncpy(ifr.ifr_name.as_mut_ptr(), name.as_ptr(), libc::IFNAMSIZ);
+            libc::strncpy(ifr.ifr_name.as_mut_ptr(), ifname.as_ptr(), libc::IFNAMSIZ);
 
             if libc::ioctl(fd, libc::SIOCGIFMTU, &mut ifr) < 0 {
                 libc::close(fd);
