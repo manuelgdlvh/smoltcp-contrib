@@ -27,5 +27,8 @@ libbpf-sys = "1.6.2"
 default = ["phy-xdp"]
 phy-xdp = ["dep:libc"]
 
-
+[[example]]
+name = "tcpdump-xdp"
+path = "examples/tcpdump_xdp.rs"
+required-features = [ "phy-xdp" ]
 
